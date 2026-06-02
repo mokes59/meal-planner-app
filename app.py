@@ -16,7 +16,7 @@ page = st.sidebar.radio("Menu", ["Meal Planner", "Shopping List", "Pantry", "Rec
 
 @st.cache_data(ttl=60)
 def get_recipes():
-    return supabase.table("recipes").select("id, name, category, base_servings, instructions").order("category").execute().data
+    return supabase.table("recipes").select("id, name, category, base_servings, instructions, calories, protein, fat, carbs").order("category").execute().data
 
 @st.cache_data(ttl=60)
 def get_pantry():
@@ -267,27 +267,11 @@ elif page == "Recipes":
                 for item in items:
                     st.write(f"• {item['ingredients']['name']}")
 
-                # Calculate total macros for the recipe, divide by servings
-                servings = r["base_servings"] or 1
-                total = {"calories": 0, "protein": 0, "fat": 0, "carbs": 0}
-                nutrition_available = False
-                for item in items:
-                    n = get_nutrition(item["ingredients"]["name"])
-                    if n:
-                        nutrition_available = True
-                        # qty_required is in the ingredient's native unit; we scale
-                        # nutrition (per 100g) proportionally by qty
-                        qty = item["qty_required"]
-                        scale = qty / 100
-                        total["calories"] += n["calories"] * scale
-                        total["protein"]  += n["protein"]  * scale
-                        total["fat"]      += n["fat"]      * scale
-                        total["carbs"]    += n["carbs"]    * scale
-
-                if nutrition_available:
-                    st.markdown(f"**Macros per serving** (recipe makes {servings}):")
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Calories", f"{total['calories']/servings:.0f} kcal")
-                    m2.metric("Protein",  f"{total['protein']/servings:.1f}g")
-                    m3.metric("Fat",      f"{total['fat']/servings:.1f}g")
-                    m4.metric("Carbs",    f"{total['carbs']/servings:.1f}g")
+            # Show macros from database (pre-calculated from cookbook)
+            if any(r.get(k) for k in ["calories", "protein", "fat", "carbs"]):
+                st.markdown(f"**Macros per serving** (recipe makes {r['base_servings'] or 1}):")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Calories", f"{r['calories'] or 0:.0f} kcal")
+                m2.metric("Protein",  f"{r['protein'] or 0:.1f}g")
+                m3.metric("Fat",      f"{r['fat'] or 0:.1f}g")
+                m4.metric("Carbs",    f"{r['carbs'] or 0:.1f}g")
