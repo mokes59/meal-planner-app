@@ -1,4 +1,5 @@
 import os
+import requests
 import streamlit as st
 from dotenv import load_dotenv
 from supabase import create_client
@@ -6,6 +7,7 @@ from datetime import date, timedelta
 
 load_dotenv()
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+USDA_API_KEY = os.getenv("USDA_API_KEY")
 
 st.set_page_config(page_title="Meal Planner", page_icon="🍽️", layout="wide")
 st.title("🍽️ Meal Planner")
@@ -45,6 +47,36 @@ def check_recipe_availability(recipe_id, recipe_items_all, pantry_map):
             short = needed - on_hand
             missing.append(f"{ing_name} (need {short} more {unit})")
     return len(missing) == 0, missing
+
+@st.cache_data(ttl=86400)
+def get_nutrition(ingredient_name):
+    """
+    Look up nutrition for an ingredient via USDA FoodData Central.
+    Returns a dict with calories, protein, fat, carbs per 100g, or None on failure.
+    The USDA API returns nutrients by nutrient ID:
+      1008 = Energy (kcal), 1003 = Protein, 1004 = Total Fat, 1005 = Carbohydrates
+    """
+    try:
+        url = "https://api.nal.usda.gov/fdc/v1/foods/search"
+        params = {
+            "query": ingredient_name,
+            "pageSize": 1,
+            "dataType": "SR Legacy,Foundation",
+            "api_key": USDA_API_KEY,
+        }
+        r = requests.get(url, params=params, timeout=5)
+        data = r.json()
+        if not data.get("foods"):
+            return None
+        nutrients = {n["nutrientId"]: n["value"] for n in data["foods"][0].get("foodNutrients", [])}
+        return {
+            "calories": nutrients.get(1008, 0),
+            "protein":  nutrients.get(1003, 0),
+            "fat":      nutrients.get(1004, 0),
+            "carbs":    nutrients.get(1005, 0),
+        }
+    except Exception:
+        return None
 
 def decrement_pantry(recipe_id, recipe_items_all, pantry_map):
     """Subtract recipe ingredient quantities from pantry, flooring at 0."""
@@ -175,11 +207,23 @@ elif page == "Pantry":
     else:
         st.write(f"{len(pantry)} ingredients on hand")
         for item in pantry:
+            ing_name = item["ingredients"]["name"]
+            unit = item["ingredients"]["unit"]
+            qty = item["qty_on_hand"]
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.write(item["ingredients"]["name"])
+                st.write(f"**{ing_name}**")
             with col2:
-                st.write(f"{item['qty_on_hand']} {item['ingredients']['unit']}")
+                st.write(f"{qty} {unit}")
+            # Nutrition lookup
+            nutrition = get_nutrition(ing_name)
+            if nutrition:
+                with st.expander("Nutrition (per 100g)", expanded=False):
+                    n1, n2, n3, n4 = st.columns(4)
+                    n1.metric("Calories", f"{nutrition['calories']:.0f} kcal")
+                    n2.metric("Protein", f"{nutrition['protein']:.1f}g")
+                    n3.metric("Fat", f"{nutrition['fat']:.1f}g")
+                    n4.metric("Carbs", f"{nutrition['carbs']:.1f}g")
     st.divider()
     st.subheader("Add to Pantry")
     ingredients = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
@@ -222,3 +266,28 @@ elif page == "Recipes":
                 st.markdown("**Ingredients:**")
                 for item in items:
                     st.write(f"• {item['ingredients']['name']}")
+
+                # Calculate total macros for the recipe, divide by servings
+                servings = r["base_servings"] or 1
+                total = {"calories": 0, "protein": 0, "fat": 0, "carbs": 0}
+                nutrition_available = False
+                for item in items:
+                    n = get_nutrition(item["ingredients"]["name"])
+                    if n:
+                        nutrition_available = True
+                        # qty_required is in the ingredient's native unit; we scale
+                        # nutrition (per 100g) proportionally by qty
+                        qty = item["qty_required"]
+                        scale = qty / 100
+                        total["calories"] += n["calories"] * scale
+                        total["protein"]  += n["protein"]  * scale
+                        total["fat"]      += n["fat"]      * scale
+                        total["carbs"]    += n["carbs"]    * scale
+
+                if nutrition_available:
+                    st.markdown(f"**Macros per serving** (recipe makes {servings}):")
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Calories", f"{total['calories']/servings:.0f} kcal")
+                    m2.metric("Protein",  f"{total['protein']/servings:.1f}g")
+                    m3.metric("Fat",      f"{total['fat']/servings:.1f}g")
+                    m4.metric("Carbs",    f"{total['carbs']/servings:.1f}g")
