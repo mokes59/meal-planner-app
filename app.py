@@ -1,4 +1,5 @@
 import os
+import re
 import itertools
 import requests
 import smtplib
@@ -728,7 +729,6 @@ elif page == "Recipes":
                 instructions = scraper.instructions() or ""
 
                 # Parse servings number from string like "4 servings"
-                import re
                 snum = re.search(r'\d+', str(servings_raw))
                 servings_num = int(snum.group()) if snum else 1
 
