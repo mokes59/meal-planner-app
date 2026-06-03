@@ -651,8 +651,9 @@ elif page == "Pantry":
                         st.success(f"Found: **{product_name}**")
                     else:
                         st.warning("Product found but name is blank — enter name manually.")
+                        st.caption(f"Debug — keys returned: {list(product.keys())[:10]}")
                 else:
-                    st.warning(f"Barcode {scanned} not found in Open Food Facts — enter name manually.")
+                    st.warning(f"Barcode {scanned} not found in Open Food Facts (status={data.get('status')}) — enter name manually.")
             except Exception as e:
                 st.warning(f"Lookup failed ({e}) — enter name manually.")
 
