@@ -633,23 +633,28 @@ elif page == "Pantry":
                 st.rerun()
         else:
             st.info(f"Barcode scanned: **{scanned}**")
-            with st.spinner("Looking up product..."):
-                try:
-                    resp = requests.get(
-                        f"https://world.openfoodfacts.org/api/v0/product/{scanned}.json",
-                        timeout=5
-                    )
-                    data = resp.json()
-                    if data.get("status") == 1:
-                        product = data["product"]
-                        product_name = product.get("product_name", "Unknown product")
+            product_name = ""
+            try:
+                resp = requests.get(
+                    f"https://world.openfoodfacts.org/api/v0/product/{scanned}.json",
+                    timeout=8
+                )
+                data = resp.json()
+                if data.get("status") == 1:
+                    product = data["product"]
+                    product_name = (
+                        product.get("product_name_en") or
+                        product.get("product_name") or
+                        product.get("abbreviated_product_name") or ""
+                    ).strip()
+                    if product_name:
                         st.success(f"Found: **{product_name}**")
                     else:
-                        product_name = ""
-                        st.warning("Product not found — enter name manually.")
-                except Exception:
-                    product_name = ""
-                    st.warning("Lookup failed — enter name manually.")
+                        st.warning("Product found but name is blank — enter name manually.")
+                else:
+                    st.warning(f"Barcode {scanned} not found in Open Food Facts — enter name manually.")
+            except Exception as e:
+                st.warning(f"Lookup failed ({e}) — enter name manually.")
 
             ingredients_all = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
             existing = next((i for i in ingredients_all if i["name"].lower() == product_name.lower()), None)
