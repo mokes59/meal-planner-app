@@ -567,21 +567,84 @@ elif page == "Pantry":
                 st.write(f"{qty} {unit}")
     st.divider()
     st.subheader("Add to Pantry")
-    ingredients = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
-    ing_names = [i["name"] for i in ingredients]
-    selected_ing = st.selectbox("Ingredient", ing_names)
-    qty = st.number_input("Quantity", min_value=0.0, step=0.5)
-    exp_date = st.date_input("Expiration Date (optional)", value=None)
-    if st.button("Add to Pantry"):
-        ing_id = next(i["id"] for i in ingredients if i["name"] == selected_ing)
-        supabase.table("pantry").upsert({
-            "ingredient_id": ing_id,
-            "qty_on_hand": qty,
-            "expiration_date": str(exp_date) if exp_date else None,
-        }).execute()
-        st.success(f"Added {selected_ing} to pantry")
-        st.cache_data.clear()
-        st.rerun()
+
+    add_method = st.radio("How to add?", ["Search by name", "Scan barcode"], horizontal=True)
+
+    if add_method == "Scan barcode":
+        st.caption("Take a photo of the barcode to look up the product.")
+        photo = st.camera_input("Point camera at barcode")
+        if photo:
+            try:
+                from PIL import Image
+                from pyzbar.pyzbar import decode
+                import io
+                img = Image.open(io.BytesIO(photo.read()))
+                barcodes = decode(img)
+                if barcodes:
+                    barcode_val = barcodes[0].data.decode("utf-8")
+                    st.info(f"Barcode detected: {barcode_val}")
+                    # Look up product via Open Food Facts
+                    resp = requests.get(
+                        f"https://world.openfoodfacts.org/api/v0/product/{barcode_val}.json",
+                        timeout=5
+                    )
+                    data = resp.json()
+                    if data.get("status") == 1:
+                        product = data["product"]
+                        product_name = product.get("product_name", "Unknown product")
+                        st.success(f"Found: **{product_name}**")
+
+                        # Check if ingredient already exists
+                        ingredients = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
+                        existing = next((i for i in ingredients if i["name"].lower() == product_name.lower()), None)
+
+                        with st.form("barcode_pantry_form"):
+                            ing_name_input = st.text_input("Ingredient name", value=product_name)
+                            qty_b = st.number_input("Quantity", min_value=0.0, step=0.5, value=1.0)
+                            unit_b = st.text_input("Unit", value="unit")
+                            exp_b = st.date_input("Expiration Date (optional)", value=None)
+                            add_b = st.form_submit_button("Add to Pantry", type="primary")
+                        if add_b:
+                            if existing:
+                                ing_id = existing["id"]
+                            else:
+                                new_ing = supabase.table("ingredients").insert({
+                                    "name": ing_name_input, "unit": unit_b
+                                }).execute()
+                                ing_id = new_ing.data[0]["id"]
+                            supabase.table("pantry").upsert({
+                                "ingredient_id": ing_id,
+                                "qty_on_hand": qty_b,
+                                "expiration_date": str(exp_b) if exp_b else None,
+                            }).execute()
+                            st.success(f"Added {ing_name_input} to pantry!")
+                            st.cache_data.clear()
+                            st.rerun()
+                    else:
+                        st.warning(f"Product not found in Open Food Facts for barcode {barcode_val}. Try adding manually.")
+                else:
+                    st.warning("No barcode detected in the photo. Try holding the camera steady and ensure the barcode is well-lit.")
+            except ImportError:
+                st.error("Barcode scanning requires pyzbar. Make sure it is installed.")
+            except Exception as e:
+                st.error(f"Error scanning barcode: {e}")
+
+    else:
+        ingredients = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
+        ing_names = [i["name"] for i in ingredients]
+        selected_ing = st.selectbox("Ingredient", ing_names)
+        qty = st.number_input("Quantity", min_value=0.0, step=0.5)
+        exp_date = st.date_input("Expiration Date (optional)", value=None)
+        if st.button("Add to Pantry"):
+            ing_id = next(i["id"] for i in ingredients if i["name"] == selected_ing)
+            supabase.table("pantry").upsert({
+                "ingredient_id": ing_id,
+                "qty_on_hand": qty,
+                "expiration_date": str(exp_date) if exp_date else None,
+            }).execute()
+            st.success(f"Added {selected_ing} to pantry")
+            st.cache_data.clear()
+            st.rerun()
 
 # ── RECIPES ───────────────────────────────────────────────────────────────────
 
