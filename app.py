@@ -581,9 +581,19 @@ elif page == "Pantry":
         if not scanned:
             st.caption("Point your rear camera at a barcode. It will scan automatically.")
             scanner_html = """
-            <div style="text-align:center;">
+            <div style="text-align:center; font-family:sans-serif;">
               <video id="video" style="width:100%; max-width:400px; border-radius:8px;"></video>
               <div id="status" style="margin-top:8px; color:#aaa; font-size:14px;">Starting camera...</div>
+              <div id="result-box" style="display:none; margin-top:12px;">
+                <div style="color:#4CAF50; font-size:16px; font-weight:bold;" id="result-text"></div>
+                <input id="barcode-val" type="text" readonly
+                  style="margin-top:8px; padding:8px; width:80%; font-size:18px; text-align:center;
+                         background:#1e1e2e; color:white; border:2px solid #4CAF50; border-radius:6px;"/>
+                <br/>
+                <div style="margin-top:8px; color:#ccc; font-size:13px;">
+                  👆 Copy this number and paste it into the box below, then click Look Up.
+                </div>
+              </div>
             </div>
             <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
             <script>
@@ -594,17 +604,20 @@ elif page == "Pantry":
               const status = document.getElementById('status');
 
               codeReader.listVideoInputDevices().then(devices => {
-                // Prefer rear camera
                 const rear = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1];
                 const deviceId = rear ? rear.deviceId : undefined;
                 status.innerText = 'Camera ready — point at barcode';
                 codeReader.decodeFromVideoDevice(deviceId, video, (result, err) => {
                   if (result) {
-                    status.innerText = '✅ Detected: ' + result.getText();
+                    const val = result.getText();
                     codeReader.reset();
-                    const url = new URL(window.top.location.href);
-                    url.searchParams.set('barcode', result.getText());
-                    window.top.location.href = url.toString();
+                    video.style.display = 'none';
+                    status.style.display = 'none';
+                    document.getElementById('barcode-val').value = val;
+                    document.getElementById('result-text').innerText = '✅ Barcode detected!';
+                    document.getElementById('result-box').style.display = 'block';
+                    // Select the text so user can easily copy
+                    document.getElementById('barcode-val').select();
                   }
                 });
               }).catch(err => {
@@ -612,7 +625,12 @@ elif page == "Pantry":
               });
             </script>
             """
-            st.components.v1.html(scanner_html, height=320)
+            st.components.v1.html(scanner_html, height=360)
+            st.caption("After scanning, copy the barcode number above and paste it below:")
+            manual_bc = st.text_input("Barcode number", placeholder="Paste barcode here")
+            if st.button("Look Up Product", type="primary") and manual_bc:
+                st.session_state["scanned_barcode"] = manual_bc.strip()
+                st.rerun()
         else:
             st.info(f"Barcode scanned: **{scanned}**")
             with st.spinner("Looking up product..."):
