@@ -710,6 +710,148 @@ elif page == "Pantry":
 
 elif page == "Recipes":
     st.header("Recipe Browser")
+
+    # ── Import from URL ────────────────────────────────────────────────────────
+    with st.expander("⬇️ Import Recipe from URL", expanded=False):
+        st.caption("Paste a link from AllRecipes, Food Network, Tasty, NYT Cooking, and 300+ other sites.")
+        import_url = st.text_input("Recipe URL", placeholder="https://www.allrecipes.com/recipe/...")
+
+        if st.button("Fetch Recipe", type="primary") and import_url:
+            try:
+                from recipe_scrapers import scrape_me
+                scraper = scrape_me(import_url)
+
+                # Extract fields
+                name        = scraper.title() or ""
+                servings_raw = scraper.yields() or "1"
+                ingredients  = scraper.ingredients() or []
+                instructions = scraper.instructions() or ""
+
+                # Parse servings number from string like "4 servings"
+                import re
+                snum = re.search(r'\d+', str(servings_raw))
+                servings_num = int(snum.group()) if snum else 1
+
+                # Try to get macros from the page
+                try:
+                    nutrition = scraper.nutrients()
+                    def parse_num(val):
+                        if not val: return 0.0
+                        m = re.search(r'[\d.]+', str(val))
+                        return float(m.group()) if m else 0.0
+                    calories = parse_num(nutrition.get("calories"))
+                    protein  = parse_num(nutrition.get("proteinContent"))
+                    fat      = parse_num(nutrition.get("fatContent"))
+                    carbs    = parse_num(nutrition.get("carbohydrateContent"))
+                except Exception:
+                    calories = protein = fat = carbs = 0.0
+
+                st.session_state["import_recipe"] = {
+                    "name": name,
+                    "servings": servings_num,
+                    "ingredients": ingredients,
+                    "instructions": instructions,
+                    "calories": calories,
+                    "protein": protein,
+                    "fat": fat,
+                    "carbs": carbs,
+                }
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"Could not scrape that URL: {e}")
+                st.caption("Try a different recipe site, or use the manual entry form below.")
+
+        # ── Review & save imported recipe ──────────────────────────────────────
+        if "import_recipe" in st.session_state:
+            imp = st.session_state["import_recipe"]
+            st.divider()
+            st.subheader("Review Imported Recipe")
+
+            categories_list = ["Breakfast", "Meal Prep", "Bowls", "Quickies",
+                                "Meal Time", "Crockpot", "Sides + Snacks", "Sweets + Treats"]
+
+            with st.form("import_form"):
+                imp_name     = st.text_input("Recipe name", value=imp["name"])
+                imp_cat      = st.selectbox("Category", categories_list)
+                imp_servings = st.number_input("Servings", min_value=1, value=imp["servings"])
+
+                st.markdown("**Macros per serving** (edit if needed):")
+                mc1, mc2, mc3, mc4 = st.columns(4)
+                imp_cal  = mc1.number_input("Calories", min_value=0.0, value=float(imp["calories"]))
+                imp_prot = mc2.number_input("Protein (g)", min_value=0.0, value=float(imp["protein"]))
+                imp_fat  = mc3.number_input("Fat (g)", min_value=0.0, value=float(imp["fat"]))
+                imp_carb = mc4.number_input("Carbs (g)", min_value=0.0, value=float(imp["carbs"]))
+
+                st.markdown("**Ingredients** (one per line, edit if needed):")
+                ing_text = st.text_area("Ingredients", value="\n".join(imp["ingredients"]), height=200)
+
+                col_save, col_cancel = st.columns(2)
+                save_btn   = col_save.form_submit_button("Save Recipe", type="primary")
+                cancel_btn = col_cancel.form_submit_button("Cancel")
+
+            if cancel_btn:
+                st.session_state.pop("import_recipe", None)
+                st.rerun()
+
+            if save_btn and imp_name:
+                # Insert recipe
+                recipe_row = supabase.table("recipes").insert({
+                    "name": imp_name,
+                    "category": imp_cat,
+                    "base_servings": imp_servings,
+                    "calories": imp_cal,
+                    "protein": imp_prot,
+                    "fat": imp_fat,
+                    "carbs": imp_carb,
+                    "instructions": imp.get("instructions", ""),
+                }).execute()
+
+                if recipe_row.data:
+                    recipe_id = recipe_row.data[0]["id"]
+                    # Parse and insert ingredients
+                    UNITS_PAT = re.compile(
+                        r'^([\d\s½¼¾⅓⅔/.]+)\s*(tbsp|tsp|cup|cups|oz|lb|lbs|g|kg|can|cans|'
+                        r'slice|slices|clove|cloves|pinch|dash|unit)s?\s+(.+)$', re.IGNORECASE
+                    )
+                    saved_ings = 0
+                    for line in ing_text.strip().split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        m = UNITS_PAT.match(line)
+                        if m:
+                            qty_str, unit, ing_name = m.group(1).strip(), m.group(2).lower(), m.group(3).strip()
+                            num = re.search(r'[\d.]+', qty_str)
+                            qty = float(num.group()) if num else 1.0
+                        else:
+                            ing_name, qty, unit = line, 1.0, "unit"
+
+                        ing_name = ing_name[:200]
+                        existing = supabase.table("ingredients").select("id").eq("name", ing_name).execute()
+                        if existing.data:
+                            ing_id = existing.data[0]["id"]
+                        else:
+                            new_ing = supabase.table("ingredients").insert({"name": ing_name, "unit": unit}).execute()
+                            if not new_ing.data:
+                                continue
+                            ing_id = new_ing.data[0]["id"]
+
+                        supabase.table("recipe_items").insert({
+                            "recipe_id": recipe_id,
+                            "ingredient_id": ing_id,
+                            "qty_required": qty,
+                        }).execute()
+                        saved_ings += 1
+
+                    st.cache_data.clear()
+                    st.session_state.pop("import_recipe", None)
+                    st.success(f"✅ '{imp_name}' saved with {saved_ings} ingredients!")
+                    st.rerun()
+                else:
+                    st.error("Failed to save recipe — try again.")
+
+    st.divider()
     recipes = get_recipes()
     search = st.text_input("Search recipes", placeholder="e.g. chicken, soup, breakfast...")
     category_filter = st.selectbox("Category", ["All"] + sorted(set(r["category"] for r in recipes)))
