@@ -373,8 +373,10 @@ elif page == "Macro Planner":
                     for meal in meals:
                         m = recipe_macros(meal, 1)
                         st.write(f"• **{meal['name']}** ({meal['category']}) — {m['calories']:.0f} cal")
-                    email_addr = st.text_input("Email shopping list to:", placeholder="you@example.com", key=f"email_{i}")
-                    if st.button(f"Build & Send Shopping List", key=f"use_combo_{i}", type="primary"):
+                    with st.form(key=f"combo_form_{i}"):
+                        email_addr = st.text_input("Email shopping list to (optional):", placeholder="you@example.com")
+                        submitted = st.form_submit_button("Build & Send Shopping List", type="primary")
+                    if submitted:
                         to_buy = build_shopping_list(
                             [m["id"] for m in meals],
                             {m["id"]: 1 for m in meals},
