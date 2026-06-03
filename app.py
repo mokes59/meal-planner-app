@@ -1,7 +1,10 @@
 import os
 import itertools
 import requests
+import smtplib
 import streamlit as st
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 from supabase import create_client
 from datetime import date, timedelta
@@ -94,13 +97,48 @@ def build_shopping_list(recipe_ids, serving_map, recipe_items_all, pantry_map):
         shortage = max(0, data["total_needed"] - data["on_hand"])
         if shortage > 0:
             to_buy.append({"ingredient_id": ing_id, "name": data["name"], "qty": shortage})
-            supabase.table("shopping_list").upsert({
-                "ingredient_id": ing_id,
-                "qty_needed": shortage,
-                "week_start_date": str(week_start),
-                "purchased": False,
-            }).execute()
+
+    if to_buy:
+        # Clear existing list for this week, then insert fresh
+        supabase.table("shopping_list").delete().eq("week_start_date", str(week_start)).execute()
+        rows = [{
+            "ingredient_id": item["ingredient_id"],
+            "qty_needed": item["qty"],
+            "week_start_date": str(week_start),
+            "purchased": False,
+        } for item in to_buy]
+        supabase.table("shopping_list").insert(rows).execute()
+
     return to_buy
+
+
+def send_shopping_email(to_email, shopping_items, recipe_names):
+    """Send shopping list to the given email address via Gmail."""
+    try:
+        gmail_user = st.secrets.get("GMAIL_USER", "")
+        gmail_pass = st.secrets.get("GMAIL_APP_PASSWORD", "")
+        if not gmail_user or not gmail_pass:
+            return False, "Email credentials not configured in Streamlit secrets."
+
+        lines = ["🛒 Shopping List\n"]
+        lines.append(f"Recipes: {', '.join(recipe_names)}\n")
+        lines.append("─" * 40)
+        for item in shopping_items:
+            lines.append(f"  • {item['name']}  ({item['qty']:.1f})")
+        body = "\n".join(lines)
+
+        msg = MIMEMultipart()
+        msg["From"] = gmail_user
+        msg["To"] = to_email
+        msg["Subject"] = "Your Meal Planner Shopping List"
+        msg.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(gmail_user, gmail_pass)
+            server.sendmail(gmail_user, to_email, msg.as_string())
+        return True, "Email sent!"
+    except Exception as e:
+        return False, str(e)
 
 def recipe_macros(r, servings=1):
     return {
@@ -307,7 +345,8 @@ elif page == "Macro Planner":
     dinner_pool  = [r for r in makeable if r["category"] in dinner_cats]
 
     if st.button("Find Combinations", type="primary"):
-        combos = []
+        all_combos = []
+        cal_target = targets.get("calories", 2000) or 2000
         # Try all breakfast × lunch × dinner combinations
         pools = [breakfast or [None], lunch_pool or [None], dinner_pool or [None]]
         for b, l, d in itertools.product(*pools):
@@ -318,28 +357,42 @@ elif page == "Macro Planner":
             for meal in meal_list:
                 total = add_macros(total, recipe_macros(meal, 1))
             if macro_fits(total, targets):
-                combos.append((meal_list, total))
-            if len(combos) >= 5:
-                break
+                # Score = how close to calorie target (lower = better)
+                score = abs(cal_target - total["calories"])
+                all_combos.append((score, meal_list, total))
+
+        # Sort by closest to calorie target, show top 5
+        all_combos.sort(key=lambda x: x[0])
+        combos = [(ml, tot) for _, ml, tot in all_combos[:5]]
 
         if combos:
-            st.success(f"Found {len(combos)} combination(s) within your targets:")
+            st.success(f"Found {len(combos)} combination(s) within your targets (sorted by closest to your calorie goal):")
             for i, (meals, total) in enumerate(combos):
                 with st.expander(f"Option {i+1}: {' + '.join(m['name'] for m in meals)}", expanded=(i==0)):
                     macro_bar(total, targets)
                     for meal in meals:
                         m = recipe_macros(meal, 1)
                         st.write(f"• **{meal['name']}** ({meal['category']}) — {m['calories']:.0f} cal")
-                    if st.button(f"Use this combination", key=f"use_combo_{i}"):
-                        week_start = date.today() - timedelta(days=date.today().weekday())
-                        build_shopping_list(
+                    email_addr = st.text_input("Email shopping list to:", placeholder="you@example.com", key=f"email_{i}")
+                    if st.button(f"Build & Send Shopping List", key=f"use_combo_{i}", type="primary"):
+                        to_buy = build_shopping_list(
                             [m["id"] for m in meals],
                             {m["id"]: 1 for m in meals},
                             recipe_items_all, pantry_map
                         )
-                        st.success("Shopping list generated for this combination!")
+                        st.cache_data.clear()
+                        if to_buy:
+                            st.success(f"Shopping list saved — {len(to_buy)} items added.")
+                            if email_addr:
+                                ok, msg = send_shopping_email(email_addr, to_buy, [m["name"] for m in meals])
+                                if ok:
+                                    st.success(f"📧 Email sent to {email_addr}")
+                                else:
+                                    st.warning(f"List saved but email failed: {msg}")
+                        else:
+                            st.info("You already have all the ingredients for this combination!")
         else:
-            st.info("No exact combinations found within your current targets and pantry. Try adjusting your targets or adding pantry items.")
+            st.info("No combinations found within your targets. Try increasing your calorie target or turning on 'Show all recipes'.")
 
     # ── Shop-to-make combinations ──
     st.divider()
