@@ -15,6 +15,10 @@ st.title("🍽️ Meal Planner")
 
 page = st.sidebar.radio("Menu", ["Meal Planner", "Macro Planner", "Shopping List", "Pantry", "Recipes", "My Profile"])
 
+# Persist profile name across page navigation
+if "profile_name" not in st.session_state:
+    st.session_state["profile_name"] = "default"
+
 # ── data loaders ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
@@ -138,7 +142,8 @@ if page == "My Profile":
     st.header("My Profile")
     st.caption("Set your daily macro targets. These are used in the Macro Planner to filter recipes.")
 
-    username = st.text_input("Your name (used to save your profile)", value="default")
+    username = st.text_input("Your name (used to save your profile)", value=st.session_state["profile_name"], key="profile_name_input")
+    st.session_state["profile_name"] = username
     profile = get_user_profile(username) if username else None
 
     with st.form("profile_form"):
@@ -185,7 +190,8 @@ elif page == "Macro Planner":
     pantry_map = {p["ingredient_id"]: p["qty_on_hand"] for p in pantry_data}
 
     # Load or enter targets
-    username = st.text_input("Your profile name", value="default", key="mp_user")
+    username = st.text_input("Your profile name", value=st.session_state["profile_name"], key="mp_user")
+    st.session_state["profile_name"] = username
     profile = get_user_profile(username) if username else None
 
     st.subheader("Daily Macro Targets")
