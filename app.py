@@ -204,17 +204,23 @@ elif page == "Macro Planner":
 
     st.divider()
 
+    ignore_pantry = st.toggle("Show all recipes (ignore pantry)", value=len(pantry_map) == 0,
+                              help="When pantry is empty, all recipes are shown. Turn off to only show recipes you have ingredients for.")
+
     # Separate recipes into makeable and shoppable
     makeable = []
     shoppable = []
     for r in recipes:
         if not any(r.get(k) for k in ["calories", "protein", "fat", "carbs"]):
             continue
-        can_make, missing = check_recipe_availability(r["id"], recipe_items_all, pantry_map)
-        if can_make:
+        if ignore_pantry:
             makeable.append(r)
         else:
-            shoppable.append((r, missing))
+            can_make, missing = check_recipe_availability(r["id"], recipe_items_all, pantry_map)
+            if can_make:
+                makeable.append(r)
+            else:
+                shoppable.append((r, missing))
 
     # ── Manual selection mode ──
     st.subheader("Build Your Day Manually")
@@ -306,7 +312,7 @@ elif page == "Macro Planner":
         pools = [breakfast or [None], lunch_pool or [None], dinner_pool or [None]]
         for b, l, d in itertools.product(*pools):
             meal_list = [x for x in [b, l, d] if x]
-            if not meal_list:
+            if len(meal_list) < 2:
                 continue
             total = {"calories": 0, "protein": 0, "fat": 0, "carbs": 0}
             for meal in meal_list:
