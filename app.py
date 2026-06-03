@@ -568,24 +568,57 @@ elif page == "Pantry":
     st.divider()
     st.subheader("Add to Pantry")
 
+    # Handle barcode passed back from JS scanner via query params
+    scanned_barcode = st.query_params.get("barcode", "")
+    if scanned_barcode:
+        st.query_params.clear()
+        st.session_state["scanned_barcode"] = scanned_barcode
+
     add_method = st.radio("How to add?", ["Search by name", "Scan barcode"], horizontal=True)
 
     if add_method == "Scan barcode":
-        st.caption("Take a photo of the barcode to look up the product.")
-        photo = st.camera_input("Point camera at barcode")
-        if photo:
-            try:
-                from PIL import Image
-                from pyzbar.pyzbar import decode
-                import io
-                img = Image.open(io.BytesIO(photo.read()))
-                barcodes = decode(img)
-                if barcodes:
-                    barcode_val = barcodes[0].data.decode("utf-8")
-                    st.info(f"Barcode detected: {barcode_val}")
-                    # Look up product via Open Food Facts
+        scanned = st.session_state.get("scanned_barcode", "")
+        if not scanned:
+            st.caption("Point your rear camera at a barcode. It will scan automatically.")
+            scanner_html = """
+            <div style="text-align:center;">
+              <video id="video" style="width:100%; max-width:400px; border-radius:8px;"></video>
+              <div id="status" style="margin-top:8px; color:#aaa; font-size:14px;">Starting camera...</div>
+            </div>
+            <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+            <script>
+              const hints = new Map();
+              hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+              const codeReader = new ZXing.BrowserMultiFormatReader(hints);
+              const video = document.getElementById('video');
+              const status = document.getElementById('status');
+
+              codeReader.listVideoInputDevices().then(devices => {
+                // Prefer rear camera
+                const rear = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1];
+                const deviceId = rear ? rear.deviceId : undefined;
+                status.innerText = 'Camera ready — point at barcode';
+                codeReader.decodeFromVideoDevice(deviceId, video, (result, err) => {
+                  if (result) {
+                    status.innerText = '✅ Detected: ' + result.getText();
+                    codeReader.reset();
+                    const url = new URL(window.top.location.href);
+                    url.searchParams.set('barcode', result.getText());
+                    window.top.location.href = url.toString();
+                  }
+                });
+              }).catch(err => {
+                status.innerText = 'Camera error: ' + err.message;
+              });
+            </script>
+            """
+            st.components.v1.html(scanner_html, height=320)
+        else:
+            st.info(f"Barcode scanned: **{scanned}**")
+            with st.spinner("Looking up product..."):
+                try:
                     resp = requests.get(
-                        f"https://world.openfoodfacts.org/api/v0/product/{barcode_val}.json",
+                        f"https://world.openfoodfacts.org/api/v0/product/{scanned}.json",
                         timeout=5
                     )
                     data = resp.json()
@@ -593,41 +626,44 @@ elif page == "Pantry":
                         product = data["product"]
                         product_name = product.get("product_name", "Unknown product")
                         st.success(f"Found: **{product_name}**")
-
-                        # Check if ingredient already exists
-                        ingredients = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
-                        existing = next((i for i in ingredients if i["name"].lower() == product_name.lower()), None)
-
-                        with st.form("barcode_pantry_form"):
-                            ing_name_input = st.text_input("Ingredient name", value=product_name)
-                            qty_b = st.number_input("Quantity", min_value=0.0, step=0.5, value=1.0)
-                            unit_b = st.text_input("Unit", value="unit")
-                            exp_b = st.date_input("Expiration Date (optional)", value=None)
-                            add_b = st.form_submit_button("Add to Pantry", type="primary")
-                        if add_b:
-                            if existing:
-                                ing_id = existing["id"]
-                            else:
-                                new_ing = supabase.table("ingredients").insert({
-                                    "name": ing_name_input, "unit": unit_b
-                                }).execute()
-                                ing_id = new_ing.data[0]["id"]
-                            supabase.table("pantry").upsert({
-                                "ingredient_id": ing_id,
-                                "qty_on_hand": qty_b,
-                                "expiration_date": str(exp_b) if exp_b else None,
-                            }).execute()
-                            st.success(f"Added {ing_name_input} to pantry!")
-                            st.cache_data.clear()
-                            st.rerun()
                     else:
-                        st.warning(f"Product not found in Open Food Facts for barcode {barcode_val}. Try adding manually.")
+                        product_name = ""
+                        st.warning("Product not found — enter name manually.")
+                except Exception:
+                    product_name = ""
+                    st.warning("Lookup failed — enter name manually.")
+
+            ingredients_all = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
+            existing = next((i for i in ingredients_all if i["name"].lower() == product_name.lower()), None)
+
+            with st.form("barcode_pantry_form"):
+                ing_name_input = st.text_input("Ingredient name", value=product_name)
+                qty_b = st.number_input("Quantity", min_value=0.0, step=0.5, value=1.0)
+                unit_b = st.text_input("Unit", value="unit")
+                exp_b = st.date_input("Expiration Date (optional)", value=None)
+                col_a, col_b = st.columns(2)
+                add_b = col_a.form_submit_button("Add to Pantry", type="primary")
+                cancel_b = col_b.form_submit_button("Scan Again")
+            if add_b:
+                if existing:
+                    ing_id = existing["id"]
                 else:
-                    st.warning("No barcode detected in the photo. Try holding the camera steady and ensure the barcode is well-lit.")
-            except ImportError:
-                st.error("Barcode scanning requires pyzbar. Make sure it is installed.")
-            except Exception as e:
-                st.error(f"Error scanning barcode: {e}")
+                    new_ing = supabase.table("ingredients").insert({
+                        "name": ing_name_input, "unit": unit_b
+                    }).execute()
+                    ing_id = new_ing.data[0]["id"]
+                supabase.table("pantry").upsert({
+                    "ingredient_id": ing_id,
+                    "qty_on_hand": qty_b,
+                    "expiration_date": str(exp_b) if exp_b else None,
+                }).execute()
+                st.session_state.pop("scanned_barcode", None)
+                st.success(f"Added {ing_name_input} to pantry!")
+                st.cache_data.clear()
+                st.rerun()
+            if cancel_b:
+                st.session_state.pop("scanned_barcode", None)
+                st.rerun()
 
     else:
         ingredients = supabase.table("ingredients").select("id, name, unit").order("name").execute().data
