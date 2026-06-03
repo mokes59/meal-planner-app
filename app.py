@@ -347,7 +347,6 @@ elif page == "Macro Planner":
     if st.button("Find Combinations", type="primary"):
         all_combos = []
         cal_target = targets.get("calories", 2000) or 2000
-        # Try all breakfast × lunch × dinner combinations
         pools = [breakfast or [None], lunch_pool or [None], dinner_pool or [None]]
         for b, l, d in itertools.product(*pools):
             meal_list = [x for x in [b, l, d] if x]
@@ -357,44 +356,40 @@ elif page == "Macro Planner":
             for meal in meal_list:
                 total = add_macros(total, recipe_macros(meal, 1))
             if macro_fits(total, targets):
-                # Score = how close to calorie target (lower = better)
                 score = abs(cal_target - total["calories"])
                 all_combos.append((score, meal_list, total))
-
-        # Sort by closest to calorie target, show top 5
         all_combos.sort(key=lambda x: x[0])
-        combos = [(ml, tot) for _, ml, tot in all_combos[:5]]
+        st.session_state["suggest_combos"] = [(ml, tot) for _, ml, tot in all_combos[:5]]
 
-        if combos:
-            st.success(f"Found {len(combos)} combination(s) within your targets (sorted by closest to your calorie goal):")
-            for i, (meals, total) in enumerate(combos):
-                with st.expander(f"Option {i+1}: {' + '.join(m['name'] for m in meals)}", expanded=(i==0)):
-                    macro_bar(total, targets)
-                    for meal in meals:
-                        m = recipe_macros(meal, 1)
-                        st.write(f"• **{meal['name']}** ({meal['category']}) — {m['calories']:.0f} cal")
-                    with st.form(key=f"combo_form_{i}"):
-                        email_addr = st.text_input("Email shopping list to (optional):", placeholder="you@example.com")
-                        submitted = st.form_submit_button("Build & Send Shopping List", type="primary")
-                    if submitted:
-                        to_buy = build_shopping_list(
-                            [m["id"] for m in meals],
-                            {m["id"]: 1 for m in meals},
-                            recipe_items_all, pantry_map
-                        )
-                        st.cache_data.clear()
-                        if to_buy:
-                            st.success(f"Shopping list saved — {len(to_buy)} items added.")
-                            if email_addr:
-                                ok, msg = send_shopping_email(email_addr, to_buy, [m["name"] for m in meals])
-                                if ok:
-                                    st.success(f"📧 Email sent to {email_addr}")
-                                else:
-                                    st.warning(f"List saved but email failed: {msg}")
-                        else:
-                            st.info("You already have all the ingredients for this combination!")
-        else:
-            st.info("No combinations found within your targets. Try increasing your calorie target or turning on 'Show all recipes'.")
+    combos = st.session_state.get("suggest_combos", [])
+    if combos:
+        st.success(f"Found {len(combos)} combination(s) within your targets (sorted by closest to your calorie goal):")
+        for i, (meals, total) in enumerate(combos):
+            with st.expander(f"Option {i+1}: {' + '.join(m['name'] for m in meals)}", expanded=(i==0)):
+                macro_bar(total, targets)
+                for meal in meals:
+                    m = recipe_macros(meal, 1)
+                    st.write(f"• **{meal['name']}** ({meal['category']}) — {m['calories']:.0f} cal")
+                with st.form(key=f"combo_form_{i}"):
+                    email_addr = st.text_input("Email shopping list to (optional):", placeholder="you@example.com")
+                    submitted = st.form_submit_button("Build & Send Shopping List", type="primary")
+                if submitted:
+                    to_buy = build_shopping_list(
+                        [m["id"] for m in meals],
+                        {m["id"]: 1 for m in meals},
+                        recipe_items_all, pantry_map
+                    )
+                    st.cache_data.clear()
+                    if to_buy:
+                        st.success(f"Shopping list saved — {len(to_buy)} items added.")
+                        if email_addr:
+                            ok, msg = send_shopping_email(email_addr, to_buy, [m["name"] for m in meals])
+                            if ok:
+                                st.success(f"📧 Email sent to {email_addr}")
+                            else:
+                                st.warning(f"List saved but email failed: {msg}")
+                    else:
+                        st.info("You already have all the ingredients for this combination!")
 
     # ── Shop-to-make combinations ──
     st.divider()
